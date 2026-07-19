@@ -126,6 +126,20 @@ Examples:
   $ dfget opencsg://<owner>/<repo>/<path> -O /tmp/model.safetensors --csg-token=<token>
 "#;
 
+fn format_tonic_status(status: &tonic::Status) -> String {
+    let mut message = format!("code: {}, message: {}", status.code(), status.message());
+
+    if !status.details().is_empty() {
+        let _ = write!(
+            &mut message,
+            ", details: {}",
+            String::from_utf8_lossy(status.details())
+        );
+    }
+
+    message
+}
+
 #[derive(Debug, Parser, Clone)]
 #[command(
     name = dfget::NAME,
@@ -414,9 +428,10 @@ struct Args {
         long,
         default_value_t = 100,
         env = "DFGET_MAX_FILES",
-        help = "Specify the max count of file to download when downloading a directory. If the actual file count is greater than this value, the downloading will be rejected"
+        allow_hyphen_values = true,
+        help = "Specify the max count of files to download when downloading a directory. If the value is less than or equal to 0, no file count limit is applied"
     )]
-    max_files: usize,
+    max_files: isize,
 
     #[arg(
         long,
@@ -544,7 +559,7 @@ async fn main() -> anyhow::Result<()> {
                     terminal::field("Message:", status.message());
 
                     if !status.details().is_empty() {
-                        terminal::field("Details:", std::str::from_utf8(status.details()).unwrap());
+                        terminal::field("Details:", String::from_utf8_lossy(status.details()));
                     }
 
                     terminal::separator();
@@ -694,10 +709,18 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         return Ok(());
     }
 
-    // If the actual file count is greater than the max_files, then reject the downloading.
+    // If max_files is greater than 0 and the actual file count is greater than
+    // max_files, then reject the downloading. If max_files is less than or equal
+    // to 0, no file count limit is applied.
     let count = entries.iter().filter(|entry| !entry.is_dir).count();
-    if count > args.max_files {
-        return Err(Error::MaxDownloadFilesExceeded(count));
+    if args.max_files > 0 {
+        let max_files = args.max_files as usize;
+        if count > max_files {
+            return Err(Error::MaxDownloadFilesExceeded {
+                actual: count,
+                limit: max_files,
+            });
+        }
     }
 
     // Initialize the multi progress bar.
@@ -1145,7 +1168,10 @@ async fn download(
             }
             Ok(None) => break,
             Err(err) => {
-                error!("get message failed: {}", err);
+                error!(
+                    "dfdaemon download stream failed: {}",
+                    format_tonic_status(&err)
+                );
                 fs::remove_file(&args.output).await.inspect_err(|err| {
                     error!("remove file {:?} failed: {}", args.output, err);
                 })?;
@@ -1538,6 +1564,41 @@ mod tests {
         for (argv, expected) in test_cases {
             let args = convert_args(Args::parse_from(std::iter::once("dfget").chain(argv)));
             assert_eq!(args.url.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn args_parse_max_files_accepts_zero_and_negative_values() {
+        let test_cases: Vec<(Vec<&str>, isize)> = vec![
+            (
+                vec!["http://test.local/test-dir/", "--output", "test-dir"],
+                100,
+            ),
+            (
+                vec![
+                    "http://test.local/test-dir/",
+                    "--output",
+                    "test-dir",
+                    "--max-files",
+                    "0",
+                ],
+                0,
+            ),
+            (
+                vec![
+                    "http://test.local/test-dir/",
+                    "--output",
+                    "test-dir",
+                    "--max-files",
+                    "-1",
+                ],
+                -1,
+            ),
+        ];
+
+        for (argv, expected) in test_cases {
+            let args = Args::parse_from(std::iter::once("dfget").chain(argv));
+            assert_eq!(args.max_files, expected);
         }
     }
 

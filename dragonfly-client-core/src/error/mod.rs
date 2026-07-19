@@ -90,6 +90,10 @@ pub enum DFError {
     #[error(transparent)]
     DownloadFromParentFailed(DownloadFromParentFailed),
 
+    /// The error when the download failed.
+    #[error("download failed: {0}")]
+    DownloadFailed(String),
+
     /// The error when the column family is not found.
     #[error{"column family {0} not found"}]
     ColumnFamilyNotFound(String),
@@ -256,9 +260,9 @@ pub enum DFError {
 
     /// The error for max download files exceeded.
     #[error(
-        "exceeded the maximum download limit of {0} files. Use --max-files to increase this limit"
+        "exceeded the maximum download file count: actual {actual}, limit {limit}. Use --max-files or DFGET_MAX_FILES to increase the limit, or set it to 0 or a negative value to disable the limit"
     )]
-    MaxDownloadFilesExceeded(usize),
+    MaxDownloadFilesExceeded { actual: usize, limit: usize },
 
     /// The error for unsupported.
     #[error("unsupported {0}")]
@@ -343,6 +347,27 @@ mod tests {
 
         for (err, expect) in test_cases {
             expect(err);
+        }
+    }
+
+    #[test]
+    fn download_errors_display_operational_context() {
+        let test_cases: Vec<(DFError, &str)> = vec![
+            (
+                DFError::DownloadFailed("back-to-source is disabled".to_string()),
+                "download failed: back-to-source is disabled",
+            ),
+            (
+                DFError::MaxDownloadFilesExceeded {
+                    actual: 12,
+                    limit: 10,
+                },
+                "exceeded the maximum download file count: actual 12, limit 10. Use --max-files or DFGET_MAX_FILES to increase the limit, or set it to 0 or a negative value to disable the limit",
+            ),
+        ];
+
+        for (err, expected) in test_cases {
+            assert_eq!(err.to_string(), expected);
         }
     }
 }

@@ -595,7 +595,9 @@ impl Task {
                         "download back-to-source is disabled, download with scheduler error: {:?}",
                         err
                     );
-                    return Err(Error::Unknown("download failed".to_string()));
+                    return Err(Error::DownloadFailed(format!(
+                        "back-to-source is disabled; scheduler download failed: {err}"
+                    )));
                 };
 
                 // Download the pieces from the source.
@@ -639,8 +641,18 @@ impl Task {
 
         // If disable back-to-source is true, return an error directly.
         if request.disable_back_to_source {
-            error!("download back-to-source is disabled");
-            return Err(Error::Unknown("download failed".to_string()));
+            let unfinished_piece_numbers = interested_pieces
+                .iter()
+                .map(|piece| piece.number)
+                .collect::<Vec<u32>>();
+            error!(
+                "download back-to-source is disabled, unfinished pieces: {:?}",
+                unfinished_piece_numbers
+            );
+            return Err(Error::DownloadFailed(format!(
+                "back-to-source is disabled; scheduler did not finish pieces: {:?}",
+                unfinished_piece_numbers
+            )));
         };
 
         // Download the pieces from the source.
